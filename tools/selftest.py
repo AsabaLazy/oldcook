@@ -194,7 +194,7 @@ def test_workflows_and_recipes_invariants() -> None:
     app_wf = (ROOT / ".github/workflows/reusable-flutter-ios12.yml").read_text()
     sync_wf = (ROOT / ".github/workflows/auto-sync.yml").read_text()
     assert '"name": "."' in eng_wf and "engine_ws/engine/src" in eng_wf and "--target-dir=ios_release" in eng_wf
-    assert "flutter precache --ios" in app_wf and "xcrun vtool" in app_wf
+    assert "flutter precache --ios" in app_wf and "relink_app_framework.py" in app_wf
     assert "--no-enable-swift-package-manager" in app_wf
     assert "schedule:" in sync_wf and "ensure-engines:" in sync_wf and "publish-or-report:" in sync_wf
     for rfile in (ROOT / "recipes").glob("*/recipe.json"):

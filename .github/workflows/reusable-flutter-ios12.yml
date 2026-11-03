@@ -167,7 +167,9 @@ jobs:
           cp -R build/ios/iphoneos/Runner.app dist_payload/Payload/
           APP_BIN="dist_payload/Payload/Runner.app/Frameworks/App.framework/App"
           if [ -f "${APP_BIN}" ]; then
-            xcrun vtool -set-build-version ios "${{ steps.meta.outputs.min_ios }}" 15.0 -replace -output "${APP_BIN}" "${APP_BIN}"
+            python3 "${GITHUB_WORKSPACE}/tools/relink_app_framework.py" "${APP_BIN}" \
+              --min-ios "${{ steps.meta.outputs.min_ios }}" \
+              --sdk "${GITHUB_WORKSPACE}/sdks/iPhoneOS12.4.sdk"
           fi
           /usr/libexec/PlistBuddy -c "Set :MinimumOSVersion ${{ steps.meta.outputs.min_ios }}" "dist_payload/Payload/Runner.app/Frameworks/App.framework/Info.plist" || true
           find dist_payload/Payload/Runner.app -type d -name "*.framework" -exec codesign --force --sign - --preserve-metadata=identifier,entitlements {} \; || true

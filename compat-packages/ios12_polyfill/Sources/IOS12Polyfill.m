@@ -1,6 +1,8 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
+#import <dlfcn.h>
 #import <objc/runtime.h>
+#import <unistd.h>
 
 // Runtime shim active ONLY prior to iOS 13.0.
 // Prevents unrecognized-selector crashes when Flutter/Impeller or plugins call iOS 13+ APIs.
@@ -9,6 +11,11 @@
 
 @protocol OCIOS12MTLDeviceLegacy <NSObject>
 - (BOOL)supportsFeatureSet:(NSUInteger)featureSet;
+@end
+
+@protocol OCIOS12PHPhotoLibraryLegacy <NSObject>
++ (NSInteger)authorizationStatus;
++ (void)requestAuthorization:(void (^)(NSInteger status))handler;
 @end
 
 @interface OCIOS12StatusBarManagerProxy : NSObject
@@ -145,6 +152,12 @@ static UIImage *oc_emptyImageConfig(__unused id self, __unused SEL _cmd,
   return [[UIImage alloc] init];
 }
 
+static UIImage *oc_selfImage(UIImage *self, __unused SEL _cmd) {
+  return self;
+}
+
+static CGFloat oc_zeroFloatGetter(__unused id self, __unused SEL _cmd) { return 0.0; }
+
 static id oc_windowSceneGetter(id self, __unused SEL _cmd) {
   OCIOS12WindowSceneProxy *proxy = [OCIOS12WindowSceneProxy sharedProxy];
   if ([self isKindOfClass:[UIWindow class]]) {
@@ -157,12 +170,65 @@ static NSSet *oc_connectedScenesGetter(__unused id self, __unused SEL _cmd) {
   return [NSSet setWithObject:[OCIOS12WindowSceneProxy sharedProxy]];
 }
 
+static UITraitCollection *oc_currentTraitCollection(__unused id self, __unused SEL _cmd) {
+  return [UIScreen mainScreen].traitCollection;
+}
+
+static NSInteger oc_accessibilityContrast(__unused id self, __unused SEL _cmd) {
+  return UIAccessibilityDarkerSystemColorsEnabled() ? 1 : 0;
+}
+
+static NSInteger oc_legibilityWeight(__unused id self, __unused SEL _cmd) {
+  return UIAccessibilityIsBoldTextEnabled() ? 1 : 0;
+}
+
+static void oc_performAsCurrentTraitCollection(__unused id self, __unused SEL _cmd, void (^actions)(void)) {
+  if (actions) actions();
+}
+
+static BOOL oc_fileHandleSeekToEnd(NSFileHandle *self, __unused SEL _cmd,
+                                   unsigned long long *offsetOut, __unused NSError **error) {
+  unsigned long long off = [self seekToEndOfFile];
+  if (offsetOut) *offsetOut = off;
+  return YES;
+}
+
+static BOOL oc_fileHandleClose(NSFileHandle *self, __unused SEL _cmd, __unused NSError **error) {
+  [self closeFile];
+  return YES;
+}
+
+static NSInteger oc_photoAuthStatus(id self, __unused SEL _cmd, __unused NSInteger level) {
+  if ([self respondsToSelector:@selector(authorizationStatus)]) {
+    return [(id<OCIOS12PHPhotoLibraryLegacy>)self authorizationStatus];
+  }
+  return 0;
+}
+
+static void oc_photoRequestAuth(id self, __unused SEL _cmd, __unused NSInteger level,
+                                void (^handler)(NSInteger status)) {
+  if ([self respondsToSelector:@selector(requestAuthorization:)]) {
+    [(id<OCIOS12PHPhotoLibraryLegacy>)self requestAuthorization:handler];
+  } else if (handler) {
+    handler(0);
+  }
+}
+
+static BOOL oc_audioSessionBoolSetter(__unused id self, __unused SEL _cmd,
+                                      __unused BOOL val, __unused NSError **outError) {
+  return YES;
+}
+
+static id oc_nilGetter(__unused id self, __unused SEL _cmd) { return nil; }
 static NSSet *oc_emptySetGetter(__unused id self, __unused SEL _cmd) { return [NSSet set]; }
 static BOOL oc_falseGetter(__unused id self, __unused SEL _cmd) { return NO; }
 static BOOL oc_trueGetter(__unused id self, __unused SEL _cmd) { return YES; }
 static NSInteger oc_zeroIntGetter(__unused id self, __unused SEL _cmd) { return 0; }
+static NSInteger oc_oneIntGetter(__unused id self, __unused SEL _cmd) { return 1; }
+static void oc_noopSetter(__unused id self, __unused SEL _cmd) {}
 static void oc_noopIdSetter(__unused id self, __unused SEL _cmd, __unused id val) {}
 static void oc_noopIntSetter(__unused id self, __unused SEL _cmd, __unused NSInteger val) {}
+static void oc_noopBoolSetter(__unused id self, __unused SEL _cmd, __unused BOOL val) {}
 
 static BOOL oc_mtlSupportsFamily(id self, __unused SEL _cmd, NSInteger family) {
   if (![self respondsToSelector:@selector(supportsFeatureSet:)]) {
@@ -209,6 +275,9 @@ static BOOL oc_mtlSupportsFamily(id self, __unused SEL _cmd, NSInteger family) {
   oc_addClassMethod(colorCls, NSSelectorFromString(@"linkColor"), OC_IMP(oc_linkColor), "@@:");
   oc_addClassMethod(colorCls, NSSelectorFromString(@"placeholderTextColor"), OC_IMP(oc_placeholderTextColor), "@@:");
   oc_addClassMethod(colorCls, NSSelectorFromString(@"systemFillColor"), OC_IMP(oc_systemFillColor), "@@:");
+  oc_addClassMethod(colorCls, NSSelectorFromString(@"secondarySystemFillColor"), OC_IMP(oc_systemFillColor), "@@:");
+  oc_addClassMethod(colorCls, NSSelectorFromString(@"tertiarySystemFillColor"), OC_IMP(oc_systemFillColor), "@@:");
+  oc_addClassMethod(colorCls, NSSelectorFromString(@"quaternarySystemFillColor"), OC_IMP(oc_systemFillColor), "@@:");
   oc_addClassMethod(colorCls, NSSelectorFromString(@"colorWithDynamicProvider:"), OC_IMP(oc_colorWithDynamicProvider), "@@:@?");
   oc_addInstanceMethod(colorCls, NSSelectorFromString(@"initWithDynamicProvider:"), OC_IMP(oc_colorWithDynamicProvider), "@@:@?");
 
@@ -216,6 +285,20 @@ static BOOL oc_mtlSupportsFamily(id self, __unused SEL _cmd, NSInteger family) {
   oc_addClassMethod(imageCls, NSSelectorFromString(@"systemImageNamed:"), OC_IMP(oc_emptyImage), "@@:@");
   oc_addClassMethod(imageCls, NSSelectorFromString(@"systemImageNamed:withConfiguration:"), OC_IMP(oc_emptyImageConfig), "@@:@@");
   oc_addClassMethod(imageCls, NSSelectorFromString(@"systemImageNamed:compatibleWithTraitCollection:"), OC_IMP(oc_emptyImageConfig), "@@:@@");
+  oc_addInstanceMethod(imageCls, NSSelectorFromString(@"imageWithBaselineOffsetFromBottom:"), OC_IMP(oc_selfImage), "@@:d");
+  oc_addInstanceMethod(imageCls, NSSelectorFromString(@"baselineOffsetFromBottom"), OC_IMP(oc_zeroFloatGetter), "d@:");
+  oc_addInstanceMethod(imageCls, NSSelectorFromString(@"imageWithTintColor:"), OC_IMP(oc_selfImage), "@@:@");
+  oc_addInstanceMethod(imageCls, NSSelectorFromString(@"imageWithTintColor:renderingMode:"), OC_IMP(oc_selfImage), "@@:@q");
+
+  Class traitCls = [UITraitCollection class];
+  oc_addClassMethod(traitCls, NSSelectorFromString(@"currentTraitCollection"), OC_IMP(oc_currentTraitCollection), "@@:");
+  oc_addInstanceMethod(traitCls, NSSelectorFromString(@"accessibilityContrast"), OC_IMP(oc_accessibilityContrast), "q@:");
+  oc_addInstanceMethod(traitCls, NSSelectorFromString(@"legibilityWeight"), OC_IMP(oc_legibilityWeight), "q@:");
+  oc_addInstanceMethod(traitCls, NSSelectorFromString(@"userInterfaceLevel"), OC_IMP(oc_zeroIntGetter), "q@:");
+  oc_addInstanceMethod(traitCls, NSSelectorFromString(@"activeAppearance"), OC_IMP(oc_oneIntGetter), "q@:");
+  oc_addInstanceMethod(traitCls, NSSelectorFromString(@"imageConfiguration"), OC_IMP(oc_nilGetter), "@@:");
+  oc_addInstanceMethod(traitCls, NSSelectorFromString(@"hasDifferentColorAppearanceComparedToTraitCollection:"), OC_IMP(oc_falseGetter), "B@:@");
+  oc_addInstanceMethod(traitCls, NSSelectorFromString(@"performAsCurrentTraitCollection:"), OC_IMP(oc_performAsCurrentTraitCollection), "v@:@?");
 
   oc_addInstanceMethod([UIWindow class], NSSelectorFromString(@"windowScene"), OC_IMP(oc_windowSceneGetter), "@@:");
   oc_addInstanceMethod([UIWindow class], NSSelectorFromString(@"setWindowScene:"), OC_IMP(oc_noopIdSetter), "v@:@");
@@ -227,6 +310,36 @@ static BOOL oc_mtlSupportsFamily(id self, __unused SEL _cmd, NSInteger family) {
   oc_addInstanceMethod([UIView class], NSSelectorFromString(@"setOverrideUserInterfaceStyle:"), OC_IMP(oc_noopIntSetter), "v@:q");
   oc_addInstanceMethod([UIViewController class], NSSelectorFromString(@"overrideUserInterfaceStyle"), OC_IMP(oc_zeroIntGetter), "q@:");
   oc_addInstanceMethod([UIViewController class], NSSelectorFromString(@"setOverrideUserInterfaceStyle:"), OC_IMP(oc_noopIntSetter), "v@:q");
+  oc_addInstanceMethod([UIViewController class], NSSelectorFromString(@"setNeedsUpdateOfSupportedInterfaceOrientations"), OC_IMP(oc_noopSetter), "v@:");
+
+  oc_addInstanceMethod([UIScrollView class], NSSelectorFromString(@"automaticallyAdjustsScrollIndicatorInsets"), OC_IMP(oc_trueGetter), "B@:");
+  oc_addInstanceMethod([UIScrollView class], NSSelectorFromString(@"setAutomaticallyAdjustsScrollIndicatorInsets:"), OC_IMP(oc_noopBoolSetter), "v@:B");
+
+  oc_addInstanceMethod([UIButton class], NSSelectorFromString(@"configuration"), OC_IMP(oc_nilGetter), "@@:");
+  oc_addInstanceMethod([UIButton class], NSSelectorFromString(@"setConfiguration:"), OC_IMP(oc_noopIdSetter), "v@:@");
+
+  oc_addInstanceMethod([UIEvent class], NSSelectorFromString(@"buttonMask"), OC_IMP(oc_zeroIntGetter), "q@:");
+  oc_addInstanceMethod([UIPress class], NSSelectorFromString(@"key"), OC_IMP(oc_nilGetter), "@@:");
+
+  oc_addInstanceMethod([NSProcessInfo class], NSSelectorFromString(@"isiOSAppOnMac"), OC_IMP(oc_falseGetter), "B@:");
+  oc_addInstanceMethod([NSProcessInfo class], NSSelectorFromString(@"isiOSAppOnVision"), OC_IMP(oc_falseGetter), "B@:");
+
+  oc_addInstanceMethod([NSFileHandle class], NSSelectorFromString(@"seekToEndReturningOffset:error:"), OC_IMP(oc_fileHandleSeekToEnd), "B@:^Q^@");
+  oc_addInstanceMethod([NSFileHandle class], NSSelectorFromString(@"closeAndReturnError:"), OC_IMP(oc_fileHandleClose), "B@:^@");
+
+  Class phCls = NSClassFromString(@"PHPhotoLibrary");
+  if (phCls) {
+    oc_addClassMethod(phCls, NSSelectorFromString(@"authorizationStatusForAccessLevel:"), OC_IMP(oc_photoAuthStatus), "q@:q");
+    oc_addClassMethod(phCls, NSSelectorFromString(@"requestAuthorizationForAccessLevel:handler:"), OC_IMP(oc_photoRequestAuth), "v@:q@?");
+  }
+
+  Class avAudioCls = NSClassFromString(@"AVAudioSession");
+  if (avAudioCls) {
+    oc_addInstanceMethod(avAudioCls, NSSelectorFromString(@"allowHapticsAndSystemSoundsDuringRecording"), OC_IMP(oc_falseGetter), "B@:");
+    oc_addInstanceMethod(avAudioCls, NSSelectorFromString(@"setAllowHapticsAndSystemSoundsDuringRecording:error:"), OC_IMP(oc_audioSessionBoolSetter), "B@:B^@");
+    oc_addInstanceMethod(avAudioCls, NSSelectorFromString(@"prefersNoInterruptionsFromSystemAlerts"), OC_IMP(oc_falseGetter), "B@:");
+    oc_addInstanceMethod(avAudioCls, NSSelectorFromString(@"setPrefersNoInterruptionsFromSystemAlerts:error:"), OC_IMP(oc_audioSessionBoolSetter), "B@:B^@");
+  }
 
   Class caLayerCls = NSClassFromString(@"CALayer");
   if (caLayerCls) {
