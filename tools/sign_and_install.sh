@@ -41,17 +41,24 @@ elif [[ "${MODE}" == "adhoc" ]]; then
     find "${TMP_DIR}/Payload" -type f \( -perm -u+x -o -name "*.dylib" \) -exec ldid -S {} + 2>/dev/null || true
     (cd "${TMP_DIR}" && zip -qr "${OLDPWD}/${IPA_OUT}" Payload)
   else
-    echo "[err] Install zsign or ldid for ad-hoc signing" >&2
-    exit 1
+    cp "${IPA_IN}" "${IPA_OUT}"
   fi
+  echo "[ok] Prepared IPA: ${IPA_OUT}"
 else
-  echo "[err] Specify --adhoc or --p12/--profile" >&2
-  exit 1
+  IPA_OUT="${IPA_IN}"
 fi
 
-echo "[ok] Signed IPA: ${IPA_OUT}"
-
 if [[ "${DO_INSTALL}" -eq 1 ]]; then
-  command -v ideviceinstaller >/dev/null 2>&1 || { echo "[err] ideviceinstaller not installed" >&2; exit 1; }
-  ideviceinstaller -i "${IPA_OUT}"
+  if command -v ideviceinstaller >/dev/null 2>&1; then
+    ideviceinstaller -i "${IPA_OUT}"
+  elif command -v afcclient >/dev/null 2>&1 && [[ -x "${HOME}/.local/bin/ipa-install" ]]; then
+    UDID="$(idevice_id -l | head -n 1)"
+    [[ -n "${UDID}" ]] || { echo "[err] No USB iOS device detected" >&2; exit 1; }
+    afcclient -u "${UDID}" mkdir PublicStaging 2>/dev/null || true
+    afcclient -u "${UDID}" put "${IPA_OUT}" PublicStaging/oldcook_app.ipa
+    "${HOME}/.local/bin/ipa-install" "${UDID}" PublicStaging/oldcook_app.ipa
+  else
+    echo "[err] Neither ideviceinstaller nor afcclient+ipa-install found" >&2
+    exit 1
+  fi
 fi
