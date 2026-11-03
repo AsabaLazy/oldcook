@@ -278,6 +278,16 @@ def transform_vendored_plugin(pkg_name: str, dst: Path, min_ios: str) -> None:
                 txt = txt.replace(ut_expr, ut_lit)
         if "UTType" not in txt and "import UniformTypeIdentifiers" in txt:
             txt = re.sub(r"^import\s+UniformTypeIdentifiers\s*\n", "", txt, flags=re.M)
+        if "PHImageManager.default().requestImageDataAndOrientation(" in txt and "if #available(iOS 13.0, *)" not in txt:
+            txt = re.sub(
+                r"PHImageManager\.default\(\)\.requestImageDataAndOrientation\(\s*for:\s*asset,\s*options:\s*options,\s*resultHandler:\s*resultHandler\)",
+                "if #available(iOS 13.0, *) {\n"
+                "      PHImageManager.default().requestImageDataAndOrientation(for: asset, options: options, resultHandler: resultHandler)\n"
+                "    } else {\n"
+                "      PHImageManager.default().requestImageData(for: asset, options: options) { data, uti, _, info in resultHandler(data, uti, .up, info) }\n"
+                "    }",
+                txt,
+            )
         if "if let windowScene = presentingWindow.windowScene" in txt:
             txt = txt.replace(
                 "if let windowScene = presentingWindow.windowScene",
