@@ -547,6 +547,10 @@ def append_pubspec_overrides(pubspec: Path, vendored_names: list[str]) -> None:
 
 
 def stub_skipped_ios_native_asset(dst: Path) -> None:
+    v_pub = dst / "pubspec.yaml"
+    if v_pub.exists():
+        ptxt = re.sub(r"^\s*resolution\s*:\s*workspace\s*\n?", "", v_pub.read_text(encoding="utf-8"), flags=re.M)
+        v_pub.write_text(ptxt, encoding="utf-8")
     for hook_rel in ("hook/build.dart", "build.dart"):
         hook = dst / hook_rel
         if hook.exists():
@@ -554,11 +558,16 @@ def stub_skipped_ios_native_asset(dst: Path) -> None:
             if "OLDCOOK_SKIP_IOS_ASSET" not in txt:
                 txt = re.sub(
                     r"(\(\s*input\s*,\s*output\s*\)\s*async\s*\{)",
-                    r"\1\n    // OLDCOOK_SKIP_IOS_ASSET\n    if (!input.config.buildCodeAssets || input.config.code.targetOS.name == 'iOS') { return; }",
+                    r"\1\n    // OLDCOOK_SKIP_IOS_ASSET\n    if (!input.config.buildCodeAssets || input.config.code.targetOS.toString().toLowerCase().contains('ios')) { return; }",
                     txt,
                     count=1,
                 )
                 hook.write_text(txt, encoding="utf-8")
+    clip_h = dst / "cxx_impl/src/clipboard_impl.h"
+    if clip_h.exists():
+        ctxt = clip_h.read_text(encoding="utf-8")
+        ctxt = ctxt.replace("!std::filesystem::u8path(path).is_absolute()", "(path.empty() || path[0] != '/')")
+        clip_h.write_text(ctxt, encoding="utf-8")
 
 
 def main() -> int:
