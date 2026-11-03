@@ -387,7 +387,12 @@ def transform_vendored_plugin(pkg_name: str, dst: Path, min_ios: str) -> None:
             swift_f.write_text(txt, encoding="utf-8")
 
     # 4. Package-specific surgical transforms
-    for objc_f in list(dst.glob("ios/**/*.{m,mm}")) + list(dst.glob("darwin/**/*.{m,mm}")):
+    for objc_f in (
+        list(dst.glob("ios/**/*.m"))
+        + list(dst.glob("ios/**/*.mm"))
+        + list(dst.glob("darwin/**/*.m"))
+        + list(dst.glob("darwin/**/*.mm"))
+    ):
         otxt = objc_f.read_text(encoding="utf-8", errors="ignore")
         if "isiOSAppOnVision" in otxt:
             otxt = otxt.replace("[info isiOSAppOnVision]", "NO")
