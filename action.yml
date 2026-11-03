@@ -106,6 +106,8 @@ runs:
     - name: Unlock flutter_tools iOS 12 deployment target & overlay prebuilt iOS 12 Engine
       shell: bash
       working-directory: _oldcook
+      env:
+        GH_TOKEN: ${{ github.token }}
       run: |
         FLUTTER_ROOT_DIR="$(dirname "$(dirname "$(which flutter)")")"
         python3 engine-patches/patch_flutter_ios12.py \
@@ -117,14 +119,20 @@ runs:
         CACHE_IOS="${FLUTTER_ROOT_DIR}/bin/cache/artifacts/engine/ios-release"
         FVER="$(python3 -c 'import re,pathlib; m=re.search(r"^\s{2}flutter:\s*['\''\"]?([0-9.]+)", pathlib.Path("work/${{ inputs.recipe }}/pubspec.yaml").read_text(), re.M); print(m.group(1) if m else "")')"
         if [ -n "${FVER}" ]; then
-          ENGINE_URL="https://github.com/${{ inputs.engine_repo }}/releases/download/engine-${FVER}-ios12/flutter-engine-${FVER}-ios12-arm64.tar.xz"
-          if curl -fsIL "${ENGINE_URL}" >/dev/null 2>&1; then
-            curl -fL --retry 3 -o /tmp/ios12-engine.tar.xz "${ENGINE_URL}"
+          if gh release download "engine-${FVER}-ios12" --repo "${{ inputs.engine_repo }}" -p "flutter-engine-${FVER}-ios12-arm64.tar.xz" -O /tmp/ios12-engine.tar.xz --clobber 2>/dev/null; then
             rm -rf "${CACHE_IOS}/Flutter.xcframework"
             tar -xJf /tmp/ios12-engine.tar.xz -C "${CACHE_IOS}"
-            echo "[ok] Overlaid prebuilt iOS 12 Flutter.xcframework from ${ENGINE_URL}"
+            echo "[ok] Overlaid prebuilt iOS 12 Flutter.xcframework via gh release download"
           else
-            echo "[warn] Prebuilt engine-${FVER}-ios12 not found at ${ENGINE_URL}"
+            ENGINE_URL="https://github.com/${{ inputs.engine_repo }}/releases/download/engine-${FVER}-ios12/flutter-engine-${FVER}-ios12-arm64.tar.xz"
+            if curl -fsIL "${ENGINE_URL}" >/dev/null 2>&1; then
+              curl -fL --retry 3 -o /tmp/ios12-engine.tar.xz "${ENGINE_URL}"
+              rm -rf "${CACHE_IOS}/Flutter.xcframework"
+              tar -xJf /tmp/ios12-engine.tar.xz -C "${CACHE_IOS}"
+              echo "[ok] Overlaid prebuilt iOS 12 Flutter.xcframework from ${ENGINE_URL}"
+            else
+              echo "[warn] Prebuilt engine-${FVER}-ios12 not found in ${{ inputs.engine_repo }}"
+            fi
           fi
         fi
 

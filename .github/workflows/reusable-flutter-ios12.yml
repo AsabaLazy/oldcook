@@ -123,6 +123,8 @@ jobs:
           PY
 
       - name: Unlock flutter_tools iOS 12 deployment target & overlay prebuilt iOS 12 Engine
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           FLUTTER_ROOT_DIR="$(dirname "$(dirname "$(which flutter)")")"
           python3 engine-patches/patch_flutter_ios12.py \
@@ -132,24 +134,15 @@ jobs:
           flutter precache --ios --no-android --no-web
 
           CACHE_IOS="${FLUTTER_ROOT_DIR}/bin/cache/artifacts/engine/ios-release"
-          ENGINE_URL="${{ inputs.engine_artifact_url }}"
-          if [ -z "${ENGINE_URL}" ]; then
-            FVER="$(python3 -c 'import re,pathlib; m=re.search(r"^\s{2}flutter:\s*['\''\"]?([0-9.]+)", pathlib.Path("work/${{ inputs.recipe }}/pubspec.yaml").read_text(), re.M); print(m.group(1) if m else "")')"
-            if [ -n "${FVER}" ]; then
-              CANDIDATE="https://github.com/${{ inputs.engine_repo }}/releases/download/engine-${FVER}-ios12/flutter-engine-${FVER}-ios12-arm64.tar.xz"
-              if curl -fsIL "${CANDIDATE}" >/dev/null 2>&1; then
-                ENGINE_URL="${CANDIDATE}"
-              else
-                echo "[warn] Prebuilt engine-${FVER}-ios12 not found in ${{ inputs.engine_repo }} Releases!"
-              fi
-            fi
-          fi
-
-          if [ -n "${ENGINE_URL}" ]; then
-            curl -fL --retry 3 -o /tmp/ios12-engine.tar.xz "${ENGINE_URL}"
+          FVER="$(python3 -c 'import re,pathlib; m=re.search(r"^\s{2}flutter:\s*['\''\"]?([0-9.]+)", pathlib.Path("work/${{ inputs.recipe }}/pubspec.yaml").read_text(), re.M); print(m.group(1) if m else "")')"
+          if [ -n "${{ inputs.engine_artifact_url }}" ]; then
+            curl -fL --retry 3 -o /tmp/ios12-engine.tar.xz "${{ inputs.engine_artifact_url }}"
             rm -rf "${CACHE_IOS}/Flutter.xcframework"
             tar -xJf /tmp/ios12-engine.tar.xz -C "${CACHE_IOS}"
-            echo "[ok] Overlaid prebuilt iOS 12 Flutter.xcframework from ${ENGINE_URL}"
+          elif [ -n "${FVER}" ] && gh release download "engine-${FVER}-ios12" --repo "${{ inputs.engine_repo }}" -p "flutter-engine-${FVER}-ios12-arm64.tar.xz" -O /tmp/ios12-engine.tar.xz --clobber 2>/dev/null; then
+            rm -rf "${CACHE_IOS}/Flutter.xcframework"
+            tar -xJf /tmp/ios12-engine.tar.xz -C "${CACHE_IOS}"
+            echo "[ok] Overlaid prebuilt iOS 12 Flutter.xcframework via gh release download"
           fi
 
       - name: Apply oldcook iOS 12 recipe overlays & vendor/patch native plugins
