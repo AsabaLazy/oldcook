@@ -73,6 +73,19 @@ runs:
       with:
         channel: stable
         flutter-version-file: _oldcook/work/${{ inputs.recipe }}/pubspec.yaml
+        cache: true
+
+    - name: Restore CocoaPods & Pub caches
+      id: pod-cache
+      uses: actions/cache/restore@v4
+      with:
+        path: |
+          ~/.pub-cache
+          ~/Library/Caches/CocoaPods
+          _oldcook/work/${{ inputs.recipe }}/ios/Pods
+        key: oldcook-pods-${{ runner.os }}-${{ inputs.recipe }}-${{ hashFiles('_oldcook/work/*/pubspec.lock') }}
+        restore-keys: |
+          oldcook-pods-${{ runner.os }}-${{ inputs.recipe }}-
 
     - name: Disable SwiftPM & run upstream PowerShell pre-build hooks
       shell: bash
@@ -128,8 +141,9 @@ runs:
       shell: bash
       working-directory: _oldcook/work/${{ inputs.recipe }}
       run: |
+        DIST_DIR="${GITHUB_WORKSPACE}/_oldcook/dist"
         flutter build ios --release --no-codesign ${{ steps.meta.outputs.extra_args }}
-        mkdir -p dist_payload/Payload ../../dist
+        mkdir -p dist_payload/Payload "${DIST_DIR}"
         cp -R build/ios/iphoneos/Runner.app dist_payload/Payload/
         APP_BIN="dist_payload/Payload/Runner.app/Frameworks/App.framework/App"
         if [ -f "${APP_BIN}" ]; then
@@ -138,7 +152,17 @@ runs:
         /usr/libexec/PlistBuddy -c "Set :MinimumOSVersion ${{ steps.meta.outputs.min_ios }}" "dist_payload/Payload/Runner.app/Frameworks/App.framework/Info.plist" || true
         find dist_payload/Payload/Runner.app -type d -name "*.framework" -exec codesign --force --sign - --preserve-metadata=identifier,entitlements {} \; || true
         codesign --force --sign - --preserve-metadata=identifier,entitlements dist_payload/Payload/Runner.app || true
-        (cd dist_payload && zip -qr9 "../../dist/${{ inputs.recipe }}-ios12-unsigned.ipa" Payload)
+        (cd dist_payload && zip -qr9 "${DIST_DIR}/${{ inputs.recipe }}-ios12-unsigned.ipa" Payload)
+
+    - name: Save CocoaPods & Pub caches (even on failure)
+      if: always()
+      uses: actions/cache/save@v4
+      with:
+        path: |
+          ~/.pub-cache
+          ~/Library/Caches/CocoaPods
+          _oldcook/work/${{ inputs.recipe }}/ios/Pods
+        key: oldcook-pods-${{ runner.os }}-${{ inputs.recipe }}-${{ hashFiles('_oldcook/work/*/pubspec.lock') }}-${{ github.run_id }}
 
     - name: Run offline iOS 12 Mach-O & symbol gatekeeper
       id: audit
