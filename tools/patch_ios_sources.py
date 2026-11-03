@@ -179,6 +179,33 @@ def needs_plugin_patch(pkg_dir: Path, min_ios: str) -> bool:
     return False
 
 
+SCENE_ONLY_TYPES = ("UIScene", "UISceneSession", "UIOpenURLContext", "UIWindowScene", "LPLinkMetadata")
+
+
+def annotate_swift_ios13_funcs(txt: str) -> str:
+    lines = txt.splitlines()
+    out: list[str] = []
+    func_re = re.compile(
+        r"^(\s*)(?:@\w+(?:\([^)]*\))?\s+)*(?:public\s+|private\s+|fileprivate\s+|internal\s+|open\s+|override\s+|static\s+)*func\s+\w+"
+    )
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        m = func_re.match(line)
+        if m:
+            sig_end = i
+            while sig_end < len(lines) and "{" not in lines[sig_end]:
+                sig_end += 1
+            sig_blob = "\n".join(lines[i : min(sig_end + 1, len(lines))])
+            if any(tok in sig_blob for tok in SCENE_ONLY_TYPES):
+                prev_nonempty = next((p.strip() for p in reversed(out) if p.strip()), "")
+                if "@available(" not in prev_nonempty:
+                    out.append(f"{m.group(1)}@available(iOS 13.0, *)")
+        out.append(line)
+        i += 1
+    return "\n".join(out) + ("\n" if txt.endswith("\n") else "")
+
+
 def transform_vendored_plugin(pkg_name: str, dst: Path, min_ios: str) -> None:
     # 0. Strip Dart pub workspace resolution directive if copied out of a git monorepo
     v_pub = dst / "pubspec.yaml"
@@ -226,6 +253,15 @@ def transform_vendored_plugin(pkg_name: str, dst: Path, min_ios: str) -> None:
                 txt,
                 flags=re.M,
             )
+        if ".windowScene?.screen" in txt:
+            txt = re.sub(
+                r"^(\s*)return\s+([^\n]+?)\.windowScene\?\.screen\s*$",
+                r"\1if #available(iOS 13.0, *) { return \2.windowScene?.screen ?? UIScreen.main } else { return UIScreen.main }",
+                txt,
+                flags=re.M,
+            )
+        if any(tok in txt for tok in SCENE_ONLY_TYPES):
+            txt = annotate_swift_ios13_funcs(txt)
         if txt != orig:
             swift_f.write_text(txt, encoding="utf-8")
 

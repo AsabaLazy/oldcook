@@ -134,6 +134,17 @@ def test_recipe_and_plugin_vendor_pipeline() -> None:
         (ext_pkg / "darwin/file_picker_darwin/Sources/file_picker_darwin/FilePickerPlugin.swift").write_text(
             "public class FilePickerPlugin {}\n"
         )
+        (ext_pkg / "darwin/file_picker_darwin/Sources/file_picker_darwin/SceneSample.swift").write_text(
+            "class Foo {\n"
+            "  var s: UIScreen? {\n"
+            "    return vc?.view.window?.windowScene?.screen\n"
+            "  }\n"
+            "  public func scene(\n"
+            "    _ scene: UIScene,\n"
+            "    openURLContexts ctx: Set<UIOpenURLContext>\n"
+            "  ) {}\n"
+            "}\n"
+        )
 
         (ws / ".dart_tool/package_config.json").write_text(
             json.dumps({
@@ -150,6 +161,9 @@ def test_recipe_and_plugin_vendor_pipeline() -> None:
         assert "s.ios.deployment_target = '12.2'" in (vendored / "darwin/file_picker_darwin.podspec").read_text()
         assert '.iOS("12.0")' in (vendored / "darwin/file_picker_darwin/Package.swift").read_text()
         assert (vendored / "darwin/file_picker_darwin/Sources/file_picker_darwin/IOS12LegacyFilePickerHandler.swift").exists()
+        scene_out = (vendored / "darwin/file_picker_darwin/Sources/file_picker_darwin/SceneSample.swift").read_text()
+        assert "@available(iOS 13.0, *)\n  public func scene(" in scene_out, scene_out
+        assert "UIScreen.main" in scene_out, scene_out
         pub_out = (ws / "pubspec.yaml").read_text()
         assert "path: .oldcook_plugins/file_picker_darwin" in pub_out
         assert pub_out.index("file_picker_darwin:") < pub_out.index("flutter:\n"), pub_out

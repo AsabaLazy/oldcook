@@ -150,7 +150,6 @@ def patch_engine_sources(flutter_root: Path, target_ios: str) -> int:
       "-Wno-error",
     ]
     ldflags = [
-      "-Wl,-ld_classic",
       "-Wl,-weak_framework,UniformTypeIdentifiers",
       "-Wl,-weak_framework,LinkPresentation",
       "-Wl,-weak_framework,MetricKit",
