@@ -87,11 +87,15 @@ def patch_scene_delegate(ios_dir: Path) -> None:
     scene_swift = ios_dir / "Runner/SceneDelegate.swift"
     if not scene_swift.exists():
         return
-    txt = scene_swift.read_text(encoding="utf-8")
-    if "@available(iOS 13.0, *)" not in txt.split("class SceneDelegate")[0] and "class SceneDelegate" in txt:
-        txt = txt.replace("class SceneDelegate", "@available(iOS 13.0, *)\nclass SceneDelegate", 1)
-        scene_swift.write_text(txt, encoding="utf-8")
-        print("[ok] Guarded ios/Runner/SceneDelegate.swift with @available(iOS 13.0, *)")
+    clean_scene = (
+        "import Flutter\n"
+        "import UIKit\n\n"
+        "@available(iOS 13.0, *)\n"
+        "class SceneDelegate: FlutterSceneDelegate {}\n"
+    )
+    if scene_swift.read_text(encoding="utf-8") != clean_scene:
+        scene_swift.write_text(clean_scene, encoding="utf-8")
+        print("[ok] Replaced ios/Runner/SceneDelegate.swift with SDK-universal @available(iOS 13.0, *) stub")
 
 
 def patch_podfile(podfile: Path, min_ios: str, polyfill_rel: str, weak_fws: list[str]) -> None:

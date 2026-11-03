@@ -13,6 +13,7 @@ import argparse
 import json
 import plistlib
 import re
+import shutil
 import struct
 import subprocess
 import sys
@@ -22,6 +23,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_SDK = ROOT / "sdks" / "iPhoneOS12.4.sdk"
+LLVM_NM = shutil.which("llvm-nm") or shutil.which("nm") or "nm"
+LLVM_OBJDUMP = shutil.which("llvm-objdump") or shutil.which("objdump") or "objdump"
 
 MH_MAGIC_64 = 0xFEEDFACF
 FAT_MAGIC = 0xCAFEBABE
@@ -228,8 +231,8 @@ def parse_macho_file(path: Path) -> dict | None:
 def nm_defined_symbols(binary: Path) -> set[str]:
     syms: set[str] = set()
     for cmd in (
-        ["llvm-nm", "--arch=arm64", "-g", "--defined-only", "-j", str(binary)],
-        ["llvm-nm", "-g", "--defined-only", "-j", str(binary)],
+        [LLVM_NM, "--arch=arm64", "-g", "--defined-only", "-j", str(binary)],
+        [LLVM_NM, "-g", "--defined-only", "-j", str(binary)],
     ):
         res = subprocess.run(cmd, capture_output=True, text=True, check=False)
         if res.returncode == 0 and res.stdout:
@@ -238,7 +241,7 @@ def nm_defined_symbols(binary: Path) -> set[str]:
 
     # Also read Mach-O exports trie (covers stripped Release frameworks using LC_DYLD_EXPORTS_TRIE)
     trie = subprocess.run(
-        ["llvm-objdump", "--macho", "--exports-trie", str(binary)],
+        [LLVM_OBJDUMP, "--macho", "--exports-trie", str(binary)],
         capture_output=True,
         text=True,
         check=False,
@@ -257,14 +260,14 @@ def nm_defined_symbols(binary: Path) -> set[str]:
 def nm_undefined_darwin(binary: Path) -> tuple[dict[str, str], dict[str, str]]:
     """Return (strong_undefs, weak_undefs) mapping symbol -> source library hint."""
     res = subprocess.run(
-        ["llvm-nm", "--arch=arm64", "-u", "-m", str(binary)],
+        [LLVM_NM, "--arch=arm64", "-u", "-m", str(binary)],
         capture_output=True,
         text=True,
         check=False,
     )
     if res.returncode != 0:
         res = subprocess.run(
-            ["llvm-nm", "-u", "-m", str(binary)],
+            [LLVM_NM, "-u", "-m", str(binary)],
             capture_output=True,
             text=True,
             check=False,

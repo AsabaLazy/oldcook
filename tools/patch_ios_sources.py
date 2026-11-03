@@ -138,14 +138,85 @@ def ver_gt(ver: str, ceiling: str) -> bool:
     return t1 > t2
 
 
+IOS12_REACHABILITY_PROVIDER_SWIFT = """import Foundation
+import SystemConfiguration
+
+public class PathMonitorConnectivityProvider: NSObject, ConnectivityProvider {
+  public var connectivityUpdateHandler: ConnectivityUpdateHandler?
+  private var reachability: SCNetworkReachability?
+
+  public var currentConnectivityTypes: [ConnectivityType] {
+    guard let ref = reachability else { return [.none] }
+    var flags = SCNetworkReachabilityFlags()
+    if !SCNetworkReachabilityGetFlags(ref, &flags) { return [.none] }
+    return Self.types(from: flags)
+  }
+
+  override init() {
+    super.init()
+    setupReachability()
+  }
+
+  private static func types(from flags: SCNetworkReachabilityFlags) -> [ConnectivityType] {
+    let reachable = flags.contains(.reachable)
+    let needsConn = flags.contains(.connectionRequired)
+    guard reachable && !needsConn else { return [.none] }
+    #if os(iOS)
+    if flags.contains(.isWWAN) { return [.cellular] }
+    #endif
+    return [.wifi]
+  }
+
+  private func setupReachability() {
+    var zeroAddress = sockaddr_in()
+    zeroAddress.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+    zeroAddress.sin_family = sa_family_t(AF_INET)
+    reachability = withUnsafePointer(to: &zeroAddress) {
+      $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+        SCNetworkReachabilityCreateWithAddress(kCFAllocatorDefault, $0)
+      }
+    }
+  }
+
+  public func start() {
+    guard let ref = reachability else { return }
+    var context = SCNetworkReachabilityContext(
+      version: 0,
+      info: Unmanaged.passUnretained(self).toOpaque(),
+      retain: nil,
+      release: nil,
+      copyDescription: nil
+    )
+    let callback: SCNetworkReachabilityCallBack = { _, flags, info in
+      guard let info = info else { return }
+      let provider = Unmanaged<PathMonitorConnectivityProvider>.fromOpaque(info).takeUnretainedValue()
+      provider.connectivityUpdateHandler?(PathMonitorConnectivityProvider.types(from: flags))
+    }
+    SCNetworkReachabilitySetCallback(ref, callback, &context)
+    SCNetworkReachabilityScheduleWithRunLoop(ref, CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue)
+  }
+
+  public func stop() {
+    guard let ref = reachability else { return }
+    SCNetworkReachabilityUnscheduleFromRunLoop(ref, CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue)
+    SCNetworkReachabilitySetCallback(ref, nil, nil)
+  }
+}
+"""
+
+
 def patch_runner_swift(work_dir: Path) -> None:
     scene_swift = work_dir / "ios/Runner/SceneDelegate.swift"
     if not scene_swift.exists():
         return
-    text = scene_swift.read_text(encoding="utf-8")
-    if "@available(iOS 13.0, *)\nclass SceneDelegate" not in text and "class SceneDelegate" in text:
-        text = text.replace("class SceneDelegate", "@available(iOS 13.0, *)\nclass SceneDelegate", 1)
-        scene_swift.write_text(text, encoding="utf-8")
+    clean_scene = (
+        "import Flutter\n"
+        "import UIKit\n\n"
+        "@available(iOS 13.0, *)\n"
+        "class SceneDelegate: FlutterSceneDelegate {}\n"
+    )
+    if scene_swift.read_text(encoding="utf-8") != clean_scene:
+        scene_swift.write_text(clean_scene, encoding="utf-8")
         print(f"[patched] {scene_swift.relative_to(work_dir)}")
 
 
@@ -316,6 +387,11 @@ def transform_vendored_plugin(pkg_name: str, dst: Path, min_ios: str) -> None:
             swift_f.write_text(txt, encoding="utf-8")
 
     # 4. Package-specific surgical transforms
+    if pkg_name == "connectivity_plus":
+        pm_file = dst / "ios/connectivity_plus/Sources/connectivity_plus/PathMonitorConnectivityProvider.swift"
+        if pm_file.exists():
+            pm_file.write_text(IOS12_REACHABILITY_PROVIDER_SWIFT, encoding="utf-8")
+
     if pkg_name == "share_plus":
         m_file = dst / "ios/share_plus/Sources/share_plus/FPPSharePlusPlugin.m"
         if m_file.exists():
