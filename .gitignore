@@ -1,0 +1,7 @@
+work/
+sdks/
+dist/
+*.ipa
+*.deb
+__pycache__/
+*.pyc

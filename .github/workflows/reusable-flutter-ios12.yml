@@ -1,0 +1,204 @@
+name: Reusable Flutter iOS 12 Build
+
+on:
+  workflow_call:
+    inputs:
+      recipe:
+        description: "Recipe directory name under oldcook/recipes/"
+        required: true
+        type: string
+      upstream_ref:
+        description: "Optional upstream tag or commit override"
+        required: false
+        default: ""
+        type: string
+      engine_repo:
+        description: "GitHub owner/repo hosting engine-<ver>-ios12 Releases"
+        required: false
+        default: "AsabaLazy/oldcook"
+        type: string
+      engine_artifact_url:
+        description: "Optional explicit URL to prebuilt iOS 12 engine tar.xz"
+        required: false
+        default: ""
+        type: string
+      strict_audit:
+        description: "Fail build if audit_ipa.py detects iOS 12 launch blockers"
+        required: false
+        default: true
+        type: boolean
+    outputs:
+      audit_passed:
+        description: "Whether audit_ipa.py passed with zero launch blockers"
+        value: ${{ jobs.build-ios12.outputs.audit_passed }}
+      ipa_artifact_name:
+        description: "Uploaded artifact name"
+        value: ${{ jobs.build-ios12.outputs.ipa_artifact_name }}
+  workflow_dispatch:
+    inputs:
+      recipe:
+        description: "Recipe directory name under oldcook/recipes/"
+        required: true
+        default: "piliplus"
+        type: string
+      upstream_ref:
+        description: "Optional upstream tag or commit override"
+        required: false
+        default: ""
+        type: string
+      engine_repo:
+        description: "GitHub owner/repo hosting engine-<ver>-ios12 Releases"
+        required: false
+        default: "AsabaLazy/oldcook"
+        type: string
+      engine_artifact_url:
+        description: "Optional explicit URL to prebuilt iOS 12 engine tar.xz"
+        required: false
+        default: ""
+        type: string
+      strict_audit:
+        description: "Fail build if audit_ipa.py detects iOS 12 launch blockers"
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  build-ios12:
+    runs-on: macos-15
+    outputs:
+      audit_passed: ${{ steps.audit.outputs.passed }}
+      ipa_artifact_name: ${{ inputs.recipe }}-ios12-bundle
+    steps:
+      - name: Checkout oldcook factory
+        uses: actions/checkout@v4
+        with:
+          repository: AsabaLazy/oldcook
+
+      - name: Fetch iOS 12.4 SDK for static gatekeeper
+        run: bash tools/fetch_sdk.sh
+
+      - name: Clone upstream source via recipe metadata
+        id: meta
+        run: |
+          python3 - <<'PY'
+          import json, os, subprocess
+          from pathlib import Path
+          cfg = json.loads(Path("recipes/${{ inputs.recipe }}/recipe.json").read_text())
+          ref = "${{ inputs.upstream_ref }}" or cfg.get("ref", "main")
+          min_ios = str(cfg.get("min_ios", "12.2"))
+          extra_args = cfg.get("extra_flutter_args", "")
+          pwsh_steps = json.dumps(cfg.get("upstream_steps_pwsh", []))
+          cmd = ["python3", "tools/apply_recipe.py", "${{ inputs.recipe }}", "--ref", ref]
+          if cfg.get("clone_full_history"):
+              cmd.append("--full-clone")
+          subprocess.run(cmd, check=True)
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              out.write(f"ref={ref}\nmin_ios={min_ios}\nextra_args={extra_args}\npwsh_steps={pwsh_steps}\n")
+          PY
+
+      - name: Reset upstream working tree before running upstream pre-build hooks
+        if: ${{ steps.meta.outputs.pwsh_steps != '[]' }}
+        working-directory: work/${{ inputs.recipe }}
+        run: git reset --hard && git clean -fd
+
+      - name: Setup Flutter matching upstream pubspec.yaml
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version-file: work/${{ inputs.recipe }}/pubspec.yaml
+
+      - name: Disable SwiftPM & run upstream PowerShell pre-build hooks (if any)
+        working-directory: work/${{ inputs.recipe }}
+        env:
+          UPSTREAM_PWSH: ${{ steps.meta.outputs.pwsh_steps }}
+        run: |
+          flutter config --no-enable-swift-package-manager
+          python3 - <<'PY'
+          import json, os, subprocess
+          ws = os.getcwd()
+          env = {**os.environ, "GITHUB_WORKSPACE": ws}
+          for step_cmd in json.loads(os.environ["UPSTREAM_PWSH"]):
+              print(f"[upstream-pwsh] {step_cmd}")
+              subprocess.run(["pwsh", "-Command", step_cmd], env=env, check=True)
+          PY
+
+      - name: Unlock flutter_tools iOS 12 deployment target & overlay prebuilt iOS 12 Engine
+        run: |
+          FLUTTER_ROOT_DIR="$(dirname "$(dirname "$(which flutter)")")"
+          python3 engine-patches/patch_flutter_ios12.py \
+            --flutter-root "${FLUTTER_ROOT_DIR}" \
+            --mode tools-only \
+            --target-ios "${{ steps.meta.outputs.min_ios }}"
+          flutter precache --ios --no-android --no-web
+
+          CACHE_IOS="${FLUTTER_ROOT_DIR}/bin/cache/artifacts/engine/ios-release"
+          ENGINE_URL="${{ inputs.engine_artifact_url }}"
+          if [ -z "${ENGINE_URL}" ]; then
+            FVER="$(python3 -c 'import re,pathlib; m=re.search(r"^\s{2}flutter:\s*['\''\"]?([0-9.]+)", pathlib.Path("work/${{ inputs.recipe }}/pubspec.yaml").read_text(), re.M); print(m.group(1) if m else "")')"
+            if [ -n "${FVER}" ]; then
+              CANDIDATE="https://github.com/${{ inputs.engine_repo }}/releases/download/engine-${FVER}-ios12/flutter-engine-${FVER}-ios12-arm64.tar.xz"
+              if curl -fsIL "${CANDIDATE}" >/dev/null 2>&1; then
+                ENGINE_URL="${CANDIDATE}"
+              else
+                echo "[warn] Prebuilt engine-${FVER}-ios12 not found in ${{ inputs.engine_repo }} Releases!"
+              fi
+            fi
+          fi
+
+          if [ -n "${ENGINE_URL}" ]; then
+            curl -fL --retry 3 -o /tmp/ios12-engine.tar.xz "${ENGINE_URL}"
+            rm -rf "${CACHE_IOS}/Flutter.xcframework"
+            tar -xJf /tmp/ios12-engine.tar.xz -C "${CACHE_IOS}"
+            echo "[ok] Overlaid prebuilt iOS 12 Flutter.xcframework from ${ENGINE_URL}"
+          fi
+
+      - name: Apply oldcook iOS 12 recipe overlays & vendor/patch native plugins
+        run: |
+          python3 tools/apply_recipe.py "${{ inputs.recipe }}" --overlay-only
+          (cd "work/${{ inputs.recipe }}" && flutter pub get)
+          python3 tools/patch_ios_sources.py "work/${{ inputs.recipe }}" --min-ios "${{ steps.meta.outputs.min_ios }}"
+          (cd "work/${{ inputs.recipe }}" && flutter pub get)
+
+      - name: Build unsigned iOS 12 app, rewrite App.framework minos & package IPA
+        working-directory: work/${{ inputs.recipe }}
+        run: |
+          flutter build ios --release --no-codesign ${{ steps.meta.outputs.extra_args }}
+          mkdir -p dist_payload/Payload "${GITHUB_WORKSPACE}/dist"
+          cp -R build/ios/iphoneos/Runner.app dist_payload/Payload/
+          APP_BIN="dist_payload/Payload/Runner.app/Frameworks/App.framework/App"
+          if [ -f "${APP_BIN}" ]; then
+            xcrun vtool -set-build-version ios "${{ steps.meta.outputs.min_ios }}" 15.0 -replace -output "${APP_BIN}" "${APP_BIN}"
+          fi
+          /usr/libexec/PlistBuddy -c "Set :MinimumOSVersion ${{ steps.meta.outputs.min_ios }}" "dist_payload/Payload/Runner.app/Frameworks/App.framework/Info.plist" || true
+          find dist_payload/Payload/Runner.app -type d -name "*.framework" -exec codesign --force --sign - --preserve-metadata=identifier,entitlements {} \; || true
+          codesign --force --sign - --preserve-metadata=identifier,entitlements dist_payload/Payload/Runner.app || true
+          (cd dist_payload && zip -qr9 "${GITHUB_WORKSPACE}/dist/${{ inputs.recipe }}-ios12-unsigned.ipa" Payload)
+
+      - name: Run offline iOS 12 Mach-O & symbol gatekeeper
+        id: audit
+        run: |
+          set +e
+          python3 tools/audit_ipa.py "dist/${{ inputs.recipe }}-ios12-unsigned.ipa" \
+            --target 12.4 \
+            --json "dist/${{ inputs.recipe }}-audit.json" | tee "dist/${{ inputs.recipe }}-audit.txt"
+          RC="${PIPESTATUS[0]}"
+          set -e
+          if [ "${RC}" -eq 0 ]; then
+            echo "passed=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "passed=false" >> "${GITHUB_OUTPUT}"
+            if [ "${{ inputs.strict_audit }}" = "true" ]; then
+              echo "[gatekeeper] Blocking release due to iOS 12 symbol/Mach-O issues."
+              exit "${RC}"
+            fi
+          fi
+
+      - name: Upload IPA & iOS 12 audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.recipe }}-ios12-bundle
+          path: |
+            dist/${{ inputs.recipe }}-ios12-unsigned.ipa
+            dist/${{ inputs.recipe }}-audit.json
+            dist/${{ inputs.recipe }}-audit.txt

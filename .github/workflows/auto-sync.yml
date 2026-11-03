@@ -1,0 +1,118 @@
+name: Auto Sync Upstream Engine Cache
+
+on:
+  schedule:
+    - cron: "25 19 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Force rebuild recipe name (e.g. 'piliplus' or 'all')"
+        required: false
+        default: ""
+        type: string
+      build_apps:
+        description: "Also build recipe IPAs inside oldcook (false when consumer repos like piliplus-ios12 build IPAs)"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  check-upstream:
+    runs-on: ubuntu-latest
+    outputs:
+      has_updates: ${{ steps.check.outputs.has_updates }}
+      has_engines: ${{ steps.check.outputs.has_engines }}
+      engines_matrix: ${{ steps.check.outputs.engines_matrix }}
+      recipes_matrix: ${{ steps.check.outputs.recipes_matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check upstream repos & prebuilt engine cache
+        id: check
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 tools/check_upstream.py \
+            --repo "${GITHUB_REPOSITORY}" \
+            --force "${{ inputs.force }}" \
+            --github-output "${GITHUB_OUTPUT}"
+
+  ensure-engines:
+    needs: check-upstream
+    if: ${{ needs.check-upstream.outputs.has_engines == 'true' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        flutter_ver: ${{ fromJson(needs.check-upstream.outputs.engines_matrix) }}
+    uses: ./.github/workflows/build-engine-ios12.yml
+    with:
+      flutter_ref: ${{ matrix.flutter_ver }}
+      publish_release: true
+
+  build-updated-recipes:
+    needs: [check-upstream, ensure-engines]
+    if: ${{ always() && inputs.build_apps && needs.check-upstream.outputs.has_updates == 'true' && (needs.ensure-engines.result == 'success' || needs.ensure-engines.result == 'skipped') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        item: ${{ fromJson(needs.check-upstream.outputs.recipes_matrix) }}
+    uses: ./.github/workflows/reusable-flutter-ios12.yml
+    with:
+      recipe: ${{ matrix.item.recipe }}
+      upstream_ref: ${{ matrix.item.resolved_ref }}
+      strict_audit: false
+
+  publish-or-report:
+    needs: [check-upstream, build-updated-recipes]
+    if: ${{ always() && inputs.build_apps && needs.check-upstream.outputs.has_updates == 'true' }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        item: ${{ fromJson(needs.check-upstream.outputs.recipes_matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+
+      - name: Download build & audit artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.item.recipe }}-ios12-bundle
+          path: dist
+
+      - name: Evaluate gatekeeper verdict
+        id: gate
+        run: |
+          if grep -q "Verdict: PASS" "dist/${{ matrix.item.recipe }}-audit.txt"; then
+            echo "verdict=pass" >> "${GITHUB_OUTPUT}"
+          else
+            echo "verdict=blocked" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Publish iOS 12 Release & update state.json on PASS
+        if: ${{ steps.gate.outputs.verdict == 'pass' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          SAFE_REF="$(echo '${{ matrix.item.resolved_ref }}' | tr '/+' '--')"
+          REL_TAG="${{ matrix.item.recipe }}-${SAFE_REF}-ios12"
+          IPA_OUT="dist/${{ matrix.item.name }}_${SAFE_REF}_ios12_unsigned.ipa"
+          cp "dist/${{ matrix.item.recipe }}-ios12-unsigned.ipa" "${IPA_OUT}"
+          gh release create "${REL_TAG}" "${IPA_OUT}" "dist/${{ matrix.item.recipe }}-audit.txt" \
+            --title "${{ matrix.item.name }} ${{ matrix.item.resolved_ref }} (iOS 12 Backport)" \
+            --notes-file "dist/${{ matrix.item.recipe }}-audit.txt" || true
+
+          python3 tools/check_upstream.py \
+            --record-success "${{ matrix.item.recipe }}" \
+            --ref "${{ matrix.item.resolved_ref }}" \
+            --flutter "${{ matrix.item.flutter_version }}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git pull --rebase origin "${GITHUB_REF_NAME}"
+          git add "recipes/${{ matrix.item.recipe }}/state.json"
+          git diff --cached --quiet || (git commit -m "chore(${{ matrix.item.recipe }}): sync upstream ${{ matrix.item.resolved_ref }}" && git push)

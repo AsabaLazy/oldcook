@@ -1,0 +1,28 @@
+{
+  "name": "PiliPlus",
+  "repo": "https://github.com/bggRGjQaUbCoE/PiliPlus.git",
+  "ref": "main",
+  "track": "release",
+  "type": "flutter",
+  "min_ios": "12.2",
+  "clone_full_history": true,
+  "ios_subdir": "ios",
+  "strip_scene_manifest": true,
+  "upstream_steps_pwsh": [
+    "lib/scripts/build.ps1",
+    "lib/scripts/patch.ps1 iOS"
+  ],
+  "extra_flutter_args": "--dart-define-from-file=pili_release.json --no-pub",
+  "skip_ios_native_assets": [
+    "nativeapi"
+  ],
+  "weak_frameworks": [
+    "AVFAudio",
+    "CoreHaptics",
+    "LinkPresentation",
+    "MetricKit",
+    "PhotosUI",
+    "UniformTypeIdentifiers"
+  ],
+  "dependency_overrides": {}
+}

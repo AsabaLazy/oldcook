@@ -1,0 +1,110 @@
+name: Build Patched Flutter iOS 12 Engine
+
+on:
+  workflow_call:
+    inputs:
+      flutter_ref:
+        description: "Flutter tag or commit to patch (e.g. 3.47.9)"
+        required: true
+        type: string
+      publish_release:
+        description: "Publish prebuilt engine-<flutter_ref>-ios12 GitHub Release"
+        required: false
+        default: true
+        type: boolean
+  workflow_dispatch:
+    inputs:
+      flutter_ref:
+        description: "Flutter tag or commit to patch (e.g. 3.47.9)"
+        required: true
+        default: "3.47.9"
+        type: string
+      publish_release:
+        description: "Publish prebuilt engine-<flutter_ref>-ios12 GitHub Release"
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  build-engine:
+    runs-on: macos-15
+    timeout-minutes: 330
+    steps:
+      - name: Checkout oldcook
+        uses: actions/checkout@v4
+
+      - name: Fetch iOS 12.4 SDK for static engine verification
+        run: bash tools/fetch_sdk.sh
+
+      - name: Install depot_tools & ninja
+        run: |
+          git clone --depth 1 https://chromium.googlesource.com/chromium/tools/depot_tools.git "$HOME/depot_tools"
+          echo "$HOME/depot_tools" >> "$GITHUB_PATH"
+          brew install ninja
+
+      - name: Sync Flutter monorepo & apply semantic iOS 12 patcher
+        run: |
+          mkdir -p engine_ws
+          cat > engine_ws/.gclient <<EOF
+          solutions = [
+            {
+              "managed": False,
+              "name": ".",
+              "url": "https://github.com/flutter/flutter.git@${{ inputs.flutter_ref }}",
+              "custom_deps": {},
+              "deps_file": "DEPS",
+              "safesync_url": "",
+            },
+          ]
+          target_os = ["ios"]
+          EOF
+          cd engine_ws
+          gclient sync --no-history --shallow
+          python3 "${GITHUB_WORKSPACE}/engine-patches/patch_flutter_ios12.py" \
+            --flutter-root "${GITHUB_WORKSPACE}/engine_ws" \
+            --mode full \
+            --target-ios 12.2
+          if compgen -G "${GITHUB_WORKSPACE}/engine-patches/${{ inputs.flutter_ref }}/*.patch" > /dev/null; then
+            for p in "${GITHUB_WORKSPACE}/engine-patches/${{ inputs.flutter_ref }}"/*.patch; do
+              git apply --3way "$p"
+            done
+          fi
+
+      - name: Generate GN & compile iOS 12.2 arm64 Flutter.xcframework
+        working-directory: engine_ws/engine/src
+        run: |
+          ./flutter/tools/gn --ios --runtime-mode=release --no-rbe --no-goma --no-lto --target-dir=ios_release
+          ninja -C out/ios_release flutter/shell/platform/darwin/ios:flutter_framework
+
+      - name: Verify compiled Flutter.xcframework against iPhoneOS12.4.sdk & package
+        run: |
+          mkdir -p dist
+          OUT="engine_ws/engine/src/out/ios_release"
+          python3 tools/audit_ipa.py "${OUT}/Flutter.xcframework/ios-arm64/Flutter.framework" \
+            --target 12.4 \
+            --json "dist/engine-${{ inputs.flutter_ref }}-audit.json" | tee "dist/engine-${{ inputs.flutter_ref }}-audit.txt"
+          ARCHIVE="dist/flutter-engine-${{ inputs.flutter_ref }}-ios12-arm64.tar.xz"
+          tar -cJf "${ARCHIVE}" -C "${OUT}" Flutter.xcframework
+
+      - name: Upload Engine Artifact & Audit Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flutter-engine-${{ inputs.flutter_ref }}-ios12
+          path: |
+            dist/flutter-engine-${{ inputs.flutter_ref }}-ios12-arm64.tar.xz
+            dist/engine-${{ inputs.flutter_ref }}-audit.*
+
+      - name: Publish Reusable Engine Release
+        if: ${{ inputs.publish_release }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: engine-${{ inputs.flutter_ref }}-ios12
+          name: "Flutter Engine ${{ inputs.flutter_ref }} (iOS 12.2 arm64)"
+          body_path: dist/engine-${{ inputs.flutter_ref }}-audit.txt
+          files: |
+            dist/flutter-engine-${{ inputs.flutter_ref }}-ios12-arm64.tar.xz
+            dist/engine-${{ inputs.flutter_ref }}-audit.txt
