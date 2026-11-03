@@ -206,6 +206,19 @@ def annotate_swift_ios13_funcs(txt: str) -> str:
     return "\n".join(out) + ("\n" if txt.endswith("\n") else "")
 
 
+UTTYPE_IDENTIFIER_MAP = {
+    "UTType.gif.identifier": '"com.compuserve.gif"',
+    "UTType.image.identifier": '"public.image"',
+    "UTType.movie.identifier": '"public.movie"',
+    "UTType.jpeg.identifier": '"public.jpeg"',
+    "UTType.png.identifier": '"public.png"',
+    "UTType.audio.identifier": '"public.audio"',
+    "UTType.data.identifier": '"public.data"',
+    "UTType.item.identifier": '"public.item"',
+    "UTType.folder.identifier": '"public.folder"',
+}
+
+
 def transform_vendored_plugin(pkg_name: str, dst: Path, min_ios: str) -> None:
     # 0. Strip Dart pub workspace resolution directive if copied out of a git monorepo
     v_pub = dst / "pubspec.yaml"
@@ -259,6 +272,26 @@ def transform_vendored_plugin(pkg_name: str, dst: Path, min_ios: str) -> None:
                 r"\1if #available(iOS 13.0, *) { return \2.windowScene?.screen ?? UIScreen.main } else { return UIScreen.main }",
                 txt,
                 flags=re.M,
+            )
+        for ut_expr, ut_lit in UTTYPE_IDENTIFIER_MAP.items():
+            if ut_expr in txt:
+                txt = txt.replace(ut_expr, ut_lit)
+        if "UTType" not in txt and "import UniformTypeIdentifiers" in txt:
+            txt = re.sub(r"^import\s+UniformTypeIdentifiers\s*\n", "", txt, flags=re.M)
+        if "if let windowScene = presentingWindow.windowScene" in txt:
+            txt = txt.replace(
+                "if let windowScene = presentingWindow.windowScene",
+                "if #available(iOS 13.0, *), let windowScene = presentingWindow.windowScene",
+            )
+        if "func launchPHPicker(with context: ImagePickerMethodCallContext) {" in txt and "guard #available(iOS 14.0, *)" not in txt:
+            txt = txt.replace(
+                "func launchPHPicker(with context: ImagePickerMethodCallContext) {",
+                "func launchPHPicker(with context: ImagePickerMethodCallContext) {\n"
+                "    guard #available(iOS 14.0, *) else {\n"
+                "      launchUIImagePicker(with: FLTSourceSpecification.make(with: .gallery, camera: .rear), context: context)\n"
+                "      return\n"
+                "    }",
+                1,
             )
         if any(tok in txt for tok in SCENE_ONLY_TYPES):
             txt = annotate_swift_ios13_funcs(txt)
