@@ -3,9 +3,79 @@
 #import <objc/runtime.h>
 
 // Runtime shim active ONLY prior to iOS 13.0.
-// Prevents unrecognized-selector crashes when plugins call common iOS 13+ UIKit/Scene APIs.
+// Prevents unrecognized-selector crashes when Flutter/Impeller or plugins call iOS 13+ APIs.
 
 #define OC_IMP(fn) ((IMP)(void (*)(void))(fn))
+
+@protocol OCIOS12MTLDeviceLegacy <NSObject>
+- (BOOL)supportsFeatureSet:(NSUInteger)featureSet;
+@end
+
+@interface OCIOS12StatusBarManagerProxy : NSObject
+@end
+
+@implementation OCIOS12StatusBarManagerProxy
++ (instancetype)sharedProxy {
+  static OCIOS12StatusBarManagerProxy *inst = nil;
+  static dispatch_once_t onceToken;
+  dispatch_once(&onceToken, ^{
+    inst = [[OCIOS12StatusBarManagerProxy alloc] init];
+  });
+  return inst;
+}
+- (CGRect)statusBarFrame {
+  return [UIApplication sharedApplication].statusBarFrame;
+}
+- (BOOL)isStatusBarHidden {
+  return [UIApplication sharedApplication].statusBarHidden;
+}
+- (UIStatusBarStyle)statusBarStyle {
+  return [UIApplication sharedApplication].statusBarStyle;
+}
+@end
+
+@interface OCIOS12WindowSceneProxy : NSObject
+@property(nonatomic, weak) UIWindow *targetWindow;
+@end
+
+@implementation OCIOS12WindowSceneProxy
++ (instancetype)sharedProxy {
+  static OCIOS12WindowSceneProxy *inst = nil;
+  static dispatch_once_t onceToken;
+  dispatch_once(&onceToken, ^{
+    inst = [[OCIOS12WindowSceneProxy alloc] init];
+  });
+  return inst;
+}
+- (UIScreen *)screen {
+  UIWindow *w = self.targetWindow ?: [UIApplication sharedApplication].keyWindow;
+  return w.screen ?: [UIScreen mainScreen];
+}
+- (UIInterfaceOrientation)interfaceOrientation {
+  return [UIApplication sharedApplication].statusBarOrientation;
+}
+- (NSArray<UIWindow *> *)windows {
+  return [UIApplication sharedApplication].windows ?: @[];
+}
+- (NSInteger)activationState {
+  UIApplicationState st = [UIApplication sharedApplication].applicationState;
+  if (st == UIApplicationStateActive) return 0;   // UISceneActivationStateForegroundActive
+  if (st == UIApplicationStateInactive) return 1; // UISceneActivationStateForegroundInactive
+  return 2;                                       // UISceneActivationStateBackground
+}
+- (id)statusBarManager {
+  return [OCIOS12StatusBarManagerProxy sharedProxy];
+}
+- (id<UICoordinateSpace>)coordinateSpace {
+  return [self screen].coordinateSpace;
+}
+- (UITraitCollection *)traitCollection {
+  return [self screen].traitCollection;
+}
+- (id)delegate {
+  return nil;
+}
+@end
 
 static void oc_addClassMethod(Class cls, SEL sel, IMP imp, const char *types) {
   Class meta = object_getClass((id)cls);
@@ -75,9 +145,43 @@ static UIImage *oc_emptyImageConfig(__unused id self, __unused SEL _cmd,
   return [[UIImage alloc] init];
 }
 
-static id oc_nilGetter(__unused id self, __unused SEL _cmd) { return nil; }
+static id oc_windowSceneGetter(id self, __unused SEL _cmd) {
+  OCIOS12WindowSceneProxy *proxy = [OCIOS12WindowSceneProxy sharedProxy];
+  if ([self isKindOfClass:[UIWindow class]]) {
+    proxy.targetWindow = (UIWindow *)self;
+  }
+  return proxy;
+}
+
+static NSSet *oc_connectedScenesGetter(__unused id self, __unused SEL _cmd) {
+  return [NSSet setWithObject:[OCIOS12WindowSceneProxy sharedProxy]];
+}
+
 static NSSet *oc_emptySetGetter(__unused id self, __unused SEL _cmd) { return [NSSet set]; }
 static BOOL oc_falseGetter(__unused id self, __unused SEL _cmd) { return NO; }
+static BOOL oc_trueGetter(__unused id self, __unused SEL _cmd) { return YES; }
+static NSInteger oc_zeroIntGetter(__unused id self, __unused SEL _cmd) { return 0; }
+static void oc_noopIdSetter(__unused id self, __unused SEL _cmd, __unused id val) {}
+static void oc_noopIntSetter(__unused id self, __unused SEL _cmd, __unused NSInteger val) {}
+
+static BOOL oc_mtlSupportsFamily(id self, __unused SEL _cmd, NSInteger family) {
+  if (![self respondsToSelector:@selector(supportsFeatureSet:)]) {
+    return NO;
+  }
+  id<OCIOS12MTLDeviceLegacy> dev = (id<OCIOS12MTLDeviceLegacy>)self;
+  switch (family) {
+    case 1001: return [dev supportsFeatureSet:0];  // MTLGPUFamilyApple1 (A7)
+    case 1002: return [dev supportsFeatureSet:1];  // MTLGPUFamilyApple2 (A8)
+    case 1003: return [dev supportsFeatureSet:4];  // MTLGPUFamilyApple3 (A9/A10)
+    case 1004: return [dev supportsFeatureSet:11]; // MTLGPUFamilyApple4 (A11)
+    case 1005: return [dev supportsFeatureSet:14]; // MTLGPUFamilyApple5 (A12)
+    case 3001:
+    case 3002:
+      return [dev supportsFeatureSet:1];           // MTLGPUFamilyCommon1/2
+    default:
+      return NO;
+  }
+}
 
 @interface OCIOS12PolyfillLoader : NSObject
 @end
@@ -85,7 +189,8 @@ static BOOL oc_falseGetter(__unused id self, __unused SEL _cmd) { return NO; }
 @implementation OCIOS12PolyfillLoader
 
 + (void)load {
-  if (@available(iOS 13.0, *)) {
+  NSOperatingSystemVersion ios13 = {13, 0, 0};
+  if ([[NSProcessInfo processInfo] isOperatingSystemAtLeastVersion:ios13]) {
     return;
   }
 
@@ -112,10 +217,26 @@ static BOOL oc_falseGetter(__unused id self, __unused SEL _cmd) { return NO; }
   oc_addClassMethod(imageCls, NSSelectorFromString(@"systemImageNamed:withConfiguration:"), OC_IMP(oc_emptyImageConfig), "@@:@@");
   oc_addClassMethod(imageCls, NSSelectorFromString(@"systemImageNamed:compatibleWithTraitCollection:"), OC_IMP(oc_emptyImageConfig), "@@:@@");
 
-  oc_addInstanceMethod([UIWindow class], NSSelectorFromString(@"windowScene"), OC_IMP(oc_nilGetter), "@@:");
-  oc_addInstanceMethod([UIApplication class], NSSelectorFromString(@"connectedScenes"), OC_IMP(oc_emptySetGetter), "@@:");
+  oc_addInstanceMethod([UIWindow class], NSSelectorFromString(@"windowScene"), OC_IMP(oc_windowSceneGetter), "@@:");
+  oc_addInstanceMethod([UIWindow class], NSSelectorFromString(@"setWindowScene:"), OC_IMP(oc_noopIdSetter), "v@:@");
+  oc_addInstanceMethod([UIApplication class], NSSelectorFromString(@"connectedScenes"), OC_IMP(oc_connectedScenesGetter), "@@:");
   oc_addInstanceMethod([UIApplication class], NSSelectorFromString(@"openSessions"), OC_IMP(oc_emptySetGetter), "@@:");
   oc_addInstanceMethod([UIApplication class], NSSelectorFromString(@"supportsMultipleScenes"), OC_IMP(oc_falseGetter), "B@:");
+
+  oc_addInstanceMethod([UIView class], NSSelectorFromString(@"overrideUserInterfaceStyle"), OC_IMP(oc_zeroIntGetter), "q@:");
+  oc_addInstanceMethod([UIView class], NSSelectorFromString(@"setOverrideUserInterfaceStyle:"), OC_IMP(oc_noopIntSetter), "v@:q");
+  oc_addInstanceMethod([UIViewController class], NSSelectorFromString(@"overrideUserInterfaceStyle"), OC_IMP(oc_zeroIntGetter), "q@:");
+  oc_addInstanceMethod([UIViewController class], NSSelectorFromString(@"setOverrideUserInterfaceStyle:"), OC_IMP(oc_noopIntSetter), "v@:q");
+
+  Class caLayerCls = NSClassFromString(@"CALayer");
+  if (caLayerCls) {
+    oc_addInstanceMethod(caLayerCls, NSSelectorFromString(@"setCornerCurve:"), OC_IMP(oc_noopIdSetter), "v@:@");
+  }
+
+  // Metal iOS 13+ MTLDevice shims (inherited by concrete MTLDevice implementations via NSObject)
+  Class objCls = [NSObject class];
+  oc_addInstanceMethod(objCls, NSSelectorFromString(@"supportsFamily:"), OC_IMP(oc_mtlSupportsFamily), "B@:q");
+  oc_addInstanceMethod(objCls, NSSelectorFromString(@"hasUnifiedMemory"), OC_IMP(oc_trueGetter), "B@:");
 }
 
 @end
