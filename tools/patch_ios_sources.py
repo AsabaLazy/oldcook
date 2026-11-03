@@ -180,6 +180,12 @@ def needs_plugin_patch(pkg_dir: Path, min_ios: str) -> bool:
 
 
 def transform_vendored_plugin(pkg_name: str, dst: Path, min_ios: str) -> None:
+    # 0. Strip Dart pub workspace resolution directive if copied out of a git monorepo
+    v_pub = dst / "pubspec.yaml"
+    if v_pub.exists():
+        ptxt = re.sub(r"^\s*resolution\s*:\s*workspace\s*\n?", "", v_pub.read_text(encoding="utf-8"), flags=re.M)
+        v_pub.write_text(ptxt, encoding="utf-8")
+
     # 1. Lower all podspecs & add C++17 availability bypass
     for podspec in list(dst.glob("ios/*.podspec")) + list(dst.glob("darwin/*.podspec")):
         txt = podspec.read_text(encoding="utf-8")
@@ -332,26 +338,38 @@ def append_pubspec_overrides(pubspec: Path, vendored_names: list[str]) -> None:
     if not vendored_names or not pubspec.exists():
         return
     text = pubspec.read_text(encoding="utf-8")
-    # Strip previous auto-vendored block if re-run
     text = re.sub(
-        r"\n# BEGIN OLDCOOK VENDORED PLUGINS.*?# END OLDCOOK VENDORED PLUGINS\n?",
+        r"\n?[ \t]*# BEGIN OLDCOOK VENDORED PLUGINS.*?# END OLDCOOK VENDORED PLUGINS\n?",
         "\n",
         text,
         flags=re.S,
     )
-    has_overrides = bool(re.search(r"^dependency_overrides\s*:", text, re.M))
-    lines = ["\n# BEGIN OLDCOOK VENDORED PLUGINS"]
-    if not has_overrides:
-        lines.append("dependency_overrides:")
-    for name in sorted(vendored_names):
-        if has_overrides:
-            after = text.split("dependency_overrides:", 1)[1]
-            if re.search(rf"^\s{{2}}{re.escape(name)}\s*:", after, re.M):
+
+    m_sec = re.search(r"^dependency_overrides\s*:\s*$", text, re.M)
+    if m_sec:
+        after_start = m_sec.end()
+        m_next = re.search(r"^[A-Za-z0-9_][A-Za-z0-9_-]*\s*:", text[after_start:], re.M)
+        sec_end = after_start + m_next.start() if m_next else len(text)
+        sec_body = text[after_start:sec_end]
+
+        lines = ["  # BEGIN OLDCOOK VENDORED PLUGINS"]
+        for name in sorted(vendored_names):
+            if re.search(rf"^\s{{2}}{re.escape(name)}\s*:", sec_body, re.M):
                 continue
-        lines.append(f"  {name}:")
-        lines.append(f"    path: .oldcook_plugins/{name}")
-    lines.append("# END OLDCOOK VENDORED PLUGINS\n")
-    if len(lines) > 3:
+            lines.append(f"  {name}:")
+            lines.append(f"    path: .oldcook_plugins/{name}")
+        lines.append("  # END OLDCOOK VENDORED PLUGINS")
+
+        if len(lines) > 2:
+            block = "\n" + "\n".join(lines) + "\n"
+            updated = text[:sec_end].rstrip("\n") + block + ("\n" + text[sec_end:].lstrip("\n") if sec_end < len(text) else "")
+            pubspec.write_text(updated, encoding="utf-8")
+    else:
+        lines = ["\n# BEGIN OLDCOOK VENDORED PLUGINS", "dependency_overrides:"]
+        for name in sorted(vendored_names):
+            lines.append(f"  {name}:")
+            lines.append(f"    path: .oldcook_plugins/{name}")
+        lines.append("# END OLDCOOK VENDORED PLUGINS\n")
         pubspec.write_text(text.rstrip() + "\n" + "\n".join(lines), encoding="utf-8")
 
 

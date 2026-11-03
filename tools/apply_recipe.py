@@ -168,11 +168,27 @@ def patch_podfile(podfile: Path, min_ios: str, polyfill_rel: str, weak_fws: list
     print(f"[ok] Patched {podfile.name} (platform :ios, '{min_ios}', ld_classic + weak overlays + polyfill)")
 
 
+def format_override_entry(pkg: str, spec: dict) -> list[str]:
+    out = [f"  {pkg}:"]
+    if "path" in spec:
+        out.append(f"    path: {spec['path']}")
+    elif "git" in spec:
+        out.append("    git:")
+        out.append(f"      url: {spec['git']['url']}")
+        if "path" in spec["git"]:
+            out.append(f"      path: {spec['git']['path']}")
+        if "ref" in spec["git"]:
+            out.append(f"      ref: {spec['git']['ref']}")
+    elif "version" in spec:
+        out = [f"  {pkg}: {spec['version']}"]
+    return out
+
+
 def patch_pubspec_overrides(pubspec: Path, recipe_overrides: dict) -> None:
     if not pubspec.exists():
         return
     text = pubspec.read_text(encoding="utf-8")
-    text = re.sub(r"\n# BEGIN OLDCOOK OVERRIDES.*?# END OLDCOOK OVERRIDES\n?", "\n", text, flags=re.S)
+    text = re.sub(r"\n?[ \t]*# BEGIN OLDCOOK OVERRIDES.*?# END OLDCOOK OVERRIDES\n?", "\n", text, flags=re.S)
 
     compat_dir = ROOT / "compat-packages"
     auto_overrides: dict[str, dict] = {}
@@ -186,31 +202,30 @@ def patch_pubspec_overrides(pubspec: Path, recipe_overrides: dict) -> None:
     if not merged:
         return
 
-    lines = ["\n# BEGIN OLDCOOK OVERRIDES"]
-    has_section = bool(re.search(r"^dependency_overrides\s*:", text, re.M))
-    if not has_section:
-        lines.append("dependency_overrides:")
+    m_sec = re.search(r"^dependency_overrides\s*:\s*$", text, re.M)
+    if m_sec:
+        after_start = m_sec.end()
+        m_next = re.search(r"^[A-Za-z0-9_][A-Za-z0-9_-]*\s*:", text[after_start:], re.M)
+        sec_end = after_start + m_next.start() if m_next else len(text)
+        sec_body = text[after_start:sec_end]
 
-    for pkg, spec in merged.items():
-        if has_section and pkg not in recipe_overrides:
-            after_sec = text.split("dependency_overrides:", 1)[1]
-            if re.search(rf"^\s{{2}}{re.escape(pkg)}\s*:", after_sec, re.M):
+        lines = ["  # BEGIN OLDCOOK OVERRIDES"]
+        for pkg, spec in merged.items():
+            if pkg not in recipe_overrides and re.search(rf"^\s{{2}}{re.escape(pkg)}\s*:", sec_body, re.M):
                 continue
-        lines.append(f"  {pkg}:")
-        if "path" in spec:
-            lines.append(f"    path: {spec['path']}")
-        elif "git" in spec:
-            lines.append("    git:")
-            lines.append(f"      url: {spec['git']['url']}")
-            if "path" in spec["git"]:
-                lines.append(f"      path: {spec['git']['path']}")
-            if "ref" in spec["git"]:
-                lines.append(f"      ref: {spec['git']['ref']}")
-        elif "version" in spec:
-            lines[-1] = f"  {pkg}: {spec['version']}"
-    lines.append("# END OLDCOOK OVERRIDES\n")
+            lines.extend(format_override_entry(pkg, spec))
+        lines.append("  # END OLDCOOK OVERRIDES")
 
-    if len(lines) > 3:
+        if len(lines) > 2:
+            block = "\n" + "\n".join(lines) + "\n"
+            updated = text[:sec_end].rstrip("\n") + block + ("\n" + text[sec_end:].lstrip("\n") if sec_end < len(text) else "")
+            pubspec.write_text(updated, encoding="utf-8")
+            print(f"[ok] Injected {len(merged)} package override(s) into dependency_overrides")
+    else:
+        lines = ["\n# BEGIN OLDCOOK OVERRIDES", "dependency_overrides:"]
+        for pkg, spec in merged.items():
+            lines.extend(format_override_entry(pkg, spec))
+        lines.append("# END OLDCOOK OVERRIDES\n")
         pubspec.write_text(text.rstrip() + "\n" + "\n".join(lines), encoding="utf-8")
         print(f"[ok] Injected {len(merged)} package override(s) into pubspec.yaml")
 

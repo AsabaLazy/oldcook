@@ -102,7 +102,10 @@ def test_recipe_and_plugin_vendor_pipeline() -> None:
         (ws / "ios/Flutter").mkdir(parents=True)
         (ws / ".dart_tool").mkdir(parents=True)
 
-        (ws / "pubspec.yaml").write_text("name: mockapp\ndependencies:\n  file_picker_darwin: ^2.3.2\n")
+        (ws / "pubspec.yaml").write_text(
+            "name: mockapp\ndependencies:\n  file_picker_darwin: ^2.3.2\n\n"
+            "dependency_overrides:\n  foo: ^1.0.0\n\nflutter:\n  uses-material-design: true\n"
+        )
         (ws / "ios/Runner.xcodeproj/project.pbxproj").write_text("IPHONEOS_DEPLOYMENT_TARGET = 15.0;\n")
         (ws / "ios/Runner/Info.plist").write_text(
             '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict>'
@@ -147,7 +150,9 @@ def test_recipe_and_plugin_vendor_pipeline() -> None:
         assert "s.ios.deployment_target = '12.2'" in (vendored / "darwin/file_picker_darwin.podspec").read_text()
         assert '.iOS("12.0")' in (vendored / "darwin/file_picker_darwin/Package.swift").read_text()
         assert (vendored / "darwin/file_picker_darwin/Sources/file_picker_darwin/IOS12LegacyFilePickerHandler.swift").exists()
-        assert "path: .oldcook_plugins/file_picker_darwin" in (ws / "pubspec.yaml").read_text()
+        pub_out = (ws / "pubspec.yaml").read_text()
+        assert "path: .oldcook_plugins/file_picker_darwin" in pub_out
+        assert pub_out.index("file_picker_darwin:") < pub_out.index("flutter:\n"), pub_out
 
     print("[pass] patch_ios_sources.py verified (SceneDelegate guard + clean .oldcook_plugins vendoring)")
 
