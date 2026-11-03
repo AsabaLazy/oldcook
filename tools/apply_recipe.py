@@ -122,11 +122,7 @@ def patch_podfile(podfile: Path, min_ios: str, polyfill_rel: str, weak_fws: list
             count=1,
         )
 
-    ld_items = (
-        ["-Wl,-ld_classic"]
-        + [f"-Wl,-weak_framework,{fw}" for fw in weak_fws]
-        + [f"-Wl,-weak-l{sw}" for sw in WEAK_SWIFT_OVERLAYS]
-    )
+    ld_items = ["-Wl,-ld_classic"] + [f"-Wl,-weak_framework,{fw}" for fw in weak_fws]
     ld_ruby_list = ", ".join(repr(x) for x in ld_items)
 
     hook = f"""

@@ -180,7 +180,7 @@ def test_piliplus_overlay_idempotent() -> None:
     podfile = (pili_ws / "ios/Podfile").read_text()
     assert "platform :ios, '12.2'" in podfile
     assert "-Wl,-ld_classic" in podfile
-    assert "-Wl,-weak-lswiftUniformTypeIdentifiers" in podfile
+    assert "-Wl,-weak_framework,UniformTypeIdentifiers" in podfile
     assert "ios12_polyfill" in podfile
     assert "@available(iOS 13.0, *)" in (pili_ws / "ios/Runner/SceneDelegate.swift").read_text()
     # Reset work/piliplus back to clean upstream HEAD after test
