@@ -259,6 +259,13 @@ def transform_vendored_plugin(pkg_name: str, dst: Path, min_ios: str) -> None:
                 txt,
                 flags=re.M,
             )
+        if "extension PHPickerResult" in txt:
+            txt = re.sub(
+                r"(?<!@available\(iOS 14\.0, \*\)\n)^(extension\s+PHPickerResult\b)",
+                r"@available(iOS 14.0, *)\n\1",
+                txt,
+                flags=re.M,
+            )
         if "extension " in txt and ": FlutterSceneLifeCycleDelegate" in txt:
             txt = re.sub(
                 r"(?<!@available\(iOS 13\.0, \*\)\n)^(extension\s+\w+\s*:\s*FlutterSceneLifeCycleDelegate)",
