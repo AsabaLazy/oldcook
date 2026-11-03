@@ -553,8 +553,8 @@ def stub_skipped_ios_native_asset(dst: Path) -> None:
             txt = hook.read_text(encoding="utf-8")
             if "OLDCOOK_SKIP_IOS_ASSET" not in txt:
                 txt = re.sub(
-                    r"(build\s*\([^)]*\)\s*async\s*\{)",
-                    r"\1\n    // OLDCOOK_SKIP_IOS_ASSET\n    if (input.config.buildCodeAssets && input.config.code.targetOS.name == 'iOS') { return; }",
+                    r"(\(\s*input\s*,\s*output\s*\)\s*async\s*\{)",
+                    r"\1\n    // OLDCOOK_SKIP_IOS_ASSET\n    if (!input.config.buildCodeAssets || input.config.code.targetOS.name == 'iOS') { return; }",
                     txt,
                     count=1,
                 )

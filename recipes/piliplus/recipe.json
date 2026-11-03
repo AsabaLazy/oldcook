@@ -14,7 +14,8 @@
   ],
   "extra_flutter_args": "--dart-define-from-file=pili_release.json --no-pub",
   "skip_ios_native_assets": [
-    "nativeapi"
+    "nativeapi",
+    "cnativeapi"
   ],
   "weak_frameworks": [
     "AVFAudio",
