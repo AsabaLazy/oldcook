@@ -1,31 +1,29 @@
-# oldcook: Auto-Updating Linux-First iOS 12 Backport Factory
+# oldcook
 
-Reusable overlay factory for backporting modern Flutter (3.47+) and native open-source iOS apps (such as `bggRGjQaUbCoE/PiliPlus`) to **iOS 12.2 ~ 12.5.7** without rolling back upstream commits.
+Linux-first overlay factory for backporting modern Flutter and native open-source iOS apps to iOS 12 without rolling back upstream commits.
 
-See [Agent.md](file:///home/luo/Projects/oldcook/Agent.md) for detailed architecture, Mach-O audit findings, and maintenance rules.
+English | [简体中文](README.zh-CN.md)
 
-## Core Components
+## Install
 
-- `engine-patches/patch_flutter_ios12.py`: Idempotent semantic patcher unlocking `flutter_tools` (`IOSDeploymentTargetMigration`, `podhelper.rb`, `native_assets.dart`) and patching `Flutter.framework` (`darwin_sdk.gni`, `-fno-aligned-allocation`, `-Wl,-ld_classic`, `@available` guards) for iOS 12.2.
-- `compat-packages/ios12_polyfill/`: Automatic Objective-C `+load` runtime shim backfilling common iOS 13+ `UIColor`, `UIImage`, and `UIScene` selectors on iOS 12.
-- `tools/apply_recipe.py` & `tools/patch_ios_sources.py`: Clones upstream cleanly into `work/<recipe>`, applies `Podfile` / `project.pbxproj` / `Info.plist` / `SceneDelegate.swift` hooks, and vendors/patches native plugins into `.oldcook_plugins/` without touching `~/.pub-cache`.
-- `tools/audit_ipa.py`: Offline Linux Mach-O / `.ipa` gatekeeper checking `LC_BUILD_VERSION`, `LC_DYLD_CHAINED_FIXUPS`, dylibs, and symbols against `sdks/iPhoneOS12.4.sdk` (`.tbd`).
-- `tools/check_upstream.py` & `.github/workflows/auto-sync.yml`: Daily upstream release watcher that auto-builds new engine releases when Flutter bumps, builds updated recipes on `macos-15`, gates releases with `audit_ipa.py`, and opens diagnostic Issues if blocked.
-- `native-libs/ios12-toolchain.cmake` & `tools/sign_and_install.sh`: Linux C/C++ cross-compilation toolchain (`clang` + `cctools-port`) and local IPA signing/USB installation (`zsign` / `ldid` + `ideviceinstaller`).
+1. Clone this repository on Linux or macOS, or reference `AsabaLazy/oldcook@main` directly in GitHub Actions.
+2. Run `./tools/fetch_sdk.sh` and `python3 tools/selftest.py` to set up `iPhoneOS12.4.sdk` and verify the local toolchain.
+3. Run `python3 tools/apply_recipe.py <recipe>` to prepare an upstream workspace, or run `python3 tools/audit_ipa.py <path/to/App.ipa>` to audit a built package.
 
-## Quick Start (Linux)
+## Description
 
-```bash
-# 1. Fetch iPhoneOS12.4.sdk (~9 MB) and run the offline self-test suite
-./tools/fetch_sdk.sh
-python3 tools/selftest.py
+oldcook is a decoupled build and patching toolkit that lowers the deployment floor of Flutter 3.47+ and native iOS projects to iOS 12.2–12.5.7. It covers `flutter_tools` minimum version unlocks, `Flutter.framework` engine patches, `App.framework` Mach-O `dyld2` relinking, Objective-C `+load` runtime polyfills (`Metal`, `UIScene`, `UITraitCollection`, `UIKit`), and CocoaPods plugin source shims.
 
-# 2. Check upstream GitHub releases across all recipes/*/recipe.json
-python3 tools/check_upstream.py
+Upstream repositories stay untouched. Plugin overrides are isolated under `work/<recipe>/.oldcook_plugins/` rather than modifying `~/.pub-cache`, and every build is gated offline against `iPhoneOS12.4.sdk` before release. See [Agent.md](Agent.md) for architecture details and symbol audit rules.
 
-# 3. Prepare PiliPlus workspace with iOS 12 overlays locally
-python3 tools/apply_recipe.py piliplus
+## Changelog
 
-# 4. Audit any .ipa or .app bundle offline on Linux
-python3 tools/audit_ipa.py path/to/App.ipa --json dist/audit.json
-```
+See the [Releases](https://github.com/AsabaLazy/oldcook/releases) page.
+
+## Issues
+
+Report build failures, missing iOS 12 symbols, and recipe requests in [Issues](https://github.com/AsabaLazy/oldcook/issues).
+
+## FAQ
+
+See [Agent.md](Agent.md).
